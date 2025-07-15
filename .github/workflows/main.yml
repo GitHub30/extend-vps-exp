@@ -38,6 +38,7 @@ jobs:
           WEBDAV_USERNAME: ${{ secrets.WEBDAV_USERNAME }}
           WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
           WEBDAV_SAVE_PATH: ${{ secrets.WEBDAV_SAVE_PATH }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
 
       - name: Ensure expire.txt exists for caching
         run: touch expire.txt

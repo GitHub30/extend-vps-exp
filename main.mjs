@@ -116,11 +116,31 @@ function getBeijingTimeString() {
 
 // --- Main Script ---
 
+const args = ['--no-sandbox', '--disable-setuid-sandbox']
+if (process.env.PROXY_SERVER) {
+    const proxy_url = new URL(process.env.PROXY_SERVER)
+    proxy_url.username = ''
+    proxy_url.password = ''
+    args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''))
+}
+
 const browser = await puppeteer.launch({
-    defaultViewport: {width: 1280, height: 1024},
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    defaultViewport: { width: 1280, height: 1024 },
+    args,
 })
 const page = await browser.newPage();
+
+try {
+    if (process.env.PROXY_SERVER) {
+        const { username, password } = new URL(process.env.PROXY_SERVER)
+        if (username && password) {
+            await page.authenticate({ username, password })
+        }
+    }
+} catch (e) {
+    console.error('代理认证配置出错:', e)
+}
+
 const recordingPath = 'recording.webm'
 const recorder = await page.screencast({ path: recordingPath })
 

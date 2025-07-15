@@ -4,28 +4,27 @@ https://motoki-design.co.jp/wordpress/xserver-vps-auto-renew/
 Manual
 https://motoki-design.co.jp/wordpress/xserver-vps-auto-renew/
 
-手册 https://motoki-design.co.jp/wordpress/xserver-vps-auto-renew/
+手册
+https://motoki-design.co.jp/wordpress/xserver-vps-auto-renew/
 
-### リトライについて
+如果不起作用，请设置 GitHub Actions 的 Secrets 环境变量。
 
-main.mjsでエラーが発生すると後続処理の動画のアップロードができなくなるため、cronで複数回実行するようにお願いします。
-
-```yaml
-- cron: 0 15,16,17 * * *
+```env
+EMAIL=your@gmail.com
+PASSWORD=yourpassword
+PROXY_SERVER=http://user:password@example.com:8888
 ```
 
-### About retries
+<details><summary>安装代理服务器</summary>
 
-If an error occurs in main.mjs, subsequent video uploads won’t run, so please set it up to execute multiple times via cron.
-
-```yaml
-- cron: 0 15,16,17 * * *
+```bash
+apt update
+apt install -y tinyproxy
+echo Allow 0.0.0.0/0 >> /etc/tinyproxy/tinyproxy.conf
+echo BasicAuth user password >> /etc/tinyproxy/tinyproxy.conf
+systemctl restart tinyproxy
+systemctl status tinyproxy
 ```
+</details>
 
-### 关于重试
-
-由于 main.mjs 出现错误时，会导致后续处理的视频无法上传，所以请通过 cron 多次执行。
-
-```yaml
-- cron: 0 15,16,17 * * *
-```
+我想去西門町，和大家一起喝珍珠奶茶。
