@@ -4,6 +4,17 @@ import fs from 'fs'
 import fetch from 'node-fetch'
 
 /**
+ * 格式化中文日期为 yyyy年MM月dd日
+ * 例如：2025年7月7日 => 2025年07月07日
+ */
+function formatChineseDate(dateStr) {
+    const m = dateStr && dateStr.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+    if (!m) return dateStr || '未知';
+    const [, y, mo, d] = m;
+    return `${y}年${String(mo).padStart(2, '0')}月${String(d).padStart(2, '0')}日`;
+}
+
+/**
  * Sends a notification message to a Telegram chat.
  */
 async function sendTelegramMessage(message) {
@@ -176,7 +187,8 @@ try {
     await setTimeout(5000);
     
     // 只取一次到期日，整个流程复用
-    const currentExpireDate = await getExpirationDate(page);
+    const currentExpireDateRaw = await getExpirationDate(page);
+    const currentExpireDate = formatChineseDate(currentExpireDateRaw);
 
     await page.locator('text=更新する').click();
     await page.locator('text=引き続き無料VPSの利用を継続する').click();
@@ -189,10 +201,9 @@ try {
     if (notYetTimeMessage) {
         const match = bodyText.match(/(\d{4}年\d{1,2}月\d{1,2}日)以降にお試しください/);
         if (match) {
-            renewAvailableDate = match[1];
+            renewAvailableDate = formatChineseDate(match[1]);
         }
-        // 只用已保存的 currentExpireDate，不再重复获取
-        infoMessage = `🗓️ 未到续费时间\n\n网站提示需要到期前一天才能操作。\n可续期日期: \`${renewAvailableDate || '未知'}\`\n当前到期日: \`${currentExpireDate || '无法获取'}\`\n脚本将安全退出。\n\n北京时间: ${getBeijingTimeString()}`
+        infoMessage = `🗓️ 未到续费时间\n\n网站提示需要到期前一天才能操作。\n可续期日期: \`${renewAvailableDate || '未知'}\`\n当前到期日: \`${currentExpireDate || '未知'}\`\n脚本将安全退出。\n\n北京时间: ${getBeijingTimeString()}`
         console.log(infoMessage);
         // 不立即发送，等待录屏上传后统一通知
     } else {
@@ -201,11 +212,14 @@ try {
         await page.waitForNavigation({ waitUntil: 'networkidle2' })
         console.log('Returned to panel after renewal.');
 
-        const newExpireDate = await getExpirationDate(page);
+        const newExpireDateRaw = await getExpirationDate(page);
+        const newExpireDate = formatChineseDate(newExpireDateRaw);
+        const lastExpireDateFormatted = formatChineseDate(lastExpireDate);
+
         console.log(`Found expiration date: ${newExpireDate || 'Not Found'}`);
 
-        if (newExpireDate && newExpireDate !== lastExpireDate) {
-            const successMessage = `🎉 VPS 续费成功！\n\n- 新到期日: \`${newExpireDate}\`\n- 上次到期日: \`${lastExpireDate || '首次检测'}\`\n\n北京时间: ${getBeijingTimeString()}`
+        if (newExpireDate && newExpireDate !== lastExpireDateFormatted) {
+            const successMessage = `🎉 VPS 续费成功！\n\n- 新到期日: \`${newExpireDate}\`\n- 上次到期日: \`${lastExpireDateFormatted || '首次检测'}\`\n\n北京时间: ${getBeijingTimeString()}`
             console.log(successMessage)
             infoMessage = successMessage;
             fs.writeFileSync(expireDateFile, newExpireDate)
