@@ -194,6 +194,26 @@ try {
     await page.locator('text=引き続き無料VPSの利用を継続する').click();
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
+    // 处理验证码，判断是否存在
+    const captchaImg = await page.$('img[src^="data:"]');
+    if (captchaImg) {
+        const base64 = await captchaImg.evaluate(img => img.src);
+        let code = '';
+        try {
+            code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', {
+            method: 'POST',
+            body: base64,
+          }).then(r => r.text());
+        } catch (err) {
+        console.warn('验证码识别接口调用失败:', err);
+        }
+    if (code) {
+      await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+    }
+    } else {
+      console.log('无验证码，跳过验证码填写');
+    }
+    
     const bodyText = await page.evaluate(() => document.body.innerText);
     const notYetTimeMessage = bodyText.includes('利用期限の1日前から更新手続きが可能です');
 
