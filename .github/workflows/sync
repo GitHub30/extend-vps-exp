@@ -1,0 +1,26 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 每天 UTC 03:00 自动同步（北京时间 11:00）
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and sync
+        run: |
+          git remote add upstream https://github.com/GitHub30/extend-vps-exp.git
+          git fetch upstream
+          git checkout main  # 如果你用的是 master，请改成 master
+          git merge upstream/main
+          git push origin main
