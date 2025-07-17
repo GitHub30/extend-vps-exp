@@ -191,6 +191,7 @@ try {
     const currentExpireDate = formatChineseDate(currentExpireDateRaw);
 
     await page.locator('text=更新する').click();
+    await setTimeout(3000); // 等待3秒
     await page.locator('text=引き続き無料VPSの利用を継続する').click();
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
