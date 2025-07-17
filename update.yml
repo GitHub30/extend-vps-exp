@@ -1,5 +1,4 @@
 name: Sync Fork
-
 on:
   schedule:
     - cron: 0 3 * * *
