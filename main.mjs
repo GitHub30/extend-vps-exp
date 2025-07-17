@@ -14,6 +14,8 @@ const browser = await puppeteer.launch({
     args,
 })
 const [page] = await browser.pages()
+const userAgent = await browser.userAgent()
+await page.setUserAgent(userAgent.replace('Headless', ''))
 const recorder = await page.screencast({ path: 'recording.webm' })
 
 try {
