@@ -210,7 +210,7 @@ try {
 
     // 进入验证码页面后，先等待Turnstile，如果没有就继续
     for (let i = 0; i < 5; i++) {
-        await page.waitForTimeout(1000); // 每秒检查一次
+        await setTimeout(1000); // 每秒检查一次
         const turnstileFrame = page.frames().find(
             f => f.url().includes('challenges.cloudflare.com') || f.url().includes('turnstile')
         );
