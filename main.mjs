@@ -214,25 +214,84 @@ try {
     let solved = false;
 
     // 进入验证码页面后，先等待Turnstile，如果没有就继续
+    let turnstileHandled = false;
     for (let i = 0; i < 5; i++) {
         await setTimeout(1000); // 每秒检查一次
-        const turnstileFrame = page.frames().find(
-            f => f.url().includes('challenges.cloudflare.com') || f.url().includes('turnstile')
-        );
-        if (turnstileFrame) {
+        
+        // 首先检查主页面是否有data-sitekey属性的Turnstile元素
+        const mainPageTurnstile = await page.$('[data-sitekey*="0x4AAAAAABlb1fIlWBrSDU3B"], [data-sitekey^="0x4"], [data-callback="callbackTurnstile"]');
+        if (mainPageTurnstile) {
+            console.log('在主页面找到Cloudflare Turnstile元素');
             try {
-                await turnstileFrame.waitForSelector('.ctp-checkbox-label', { timeout: 5000 });
-                await turnstileFrame.click('.ctp-checkbox-label');
-                console.log('已点击Cloudflare Turnstile人机验证框');
+                await page.click('[data-sitekey*="0x4AAAAAABlb1fIlWBrSDU3B"], [data-sitekey^="0x4"], [data-callback="callbackTurnstile"]');
+                console.log('已点击主页面Cloudflare Turnstile元素');
+                turnstileHandled = true;
                 break;
             } catch (e) {
-                console.warn('Turnstile checkbox未出现');
+                console.warn('点击主页面Turnstile元素失败:', e.message);
             }
         }
-        if (i === 4) {
-            console.warn('5秒内未找到Cloudflare Turnstile iframe，保存页面以便排查');
-            fs.writeFileSync('turnstile_debug.html', await page.content());
+        
+        // 查找Turnstile iframe - 使用更准确的URL匹配
+        const turnstileFrame = page.frames().find(
+            f => f.url().includes('challenges.cloudflare.com') || 
+                 f.url().includes('turnstile') ||
+                 f.url().includes('cf-chl-widget')
+        );
+        
+        if (turnstileFrame) {
+            console.log(`找到Cloudflare Turnstile iframe: ${turnstileFrame.url()}`);
+            
+            // 尝试多种选择器策略
+            const selectors = [
+                '.ctp-checkbox-label',
+                '.cf-turnstile-wrapper',
+                '[type="checkbox"]',
+                '.cb-lb',
+                '.ctp-checkbox',
+                'input[type="checkbox"]'
+            ];
+            
+            let clicked = false;
+            for (const selector of selectors) {
+                try {
+                    await turnstileFrame.waitForSelector(selector, { timeout: 3000 });
+                    await turnstileFrame.click(selector);
+                    console.log(`已点击Cloudflare Turnstile人机验证框 (选择器: ${selector})`);
+                    clicked = true;
+                    turnstileHandled = true;
+                    break;
+                } catch (e) {
+                    console.log(`选择器 ${selector} 未找到或点击失败`);
+                }
+            }
+            
+            if (clicked) break;
         }
+        
+        console.log(`Turnstile检查第 ${i + 1} 次，暂未找到可用元素`);
+        
+        if (i === 4) {
+            console.warn('5秒内未找到或无法点击Cloudflare Turnstile，保存页面以便排查');
+            fs.writeFileSync('turnstile_debug.html', await page.content());
+            
+            // 同时保存所有frame的内容用于调试
+            const frames = page.frames();
+            for (let j = 0; j < frames.length; j++) {
+                try {
+                    const frameContent = await frames[j].content();
+                    fs.writeFileSync(`turnstile_frame_${j}_debug.html`, frameContent);
+                    console.log(`保存frame ${j} 内容: ${frames[j].url()}`);
+                } catch (e) {
+                    console.warn(`无法获取frame ${j} 内容:`, e.message);
+                }
+            }
+        }
+    }
+    
+    if (turnstileHandled) {
+        console.log('Turnstile处理完成，等待验证结果...');
+        await setTimeout(2000); // 等待验证处理
     }
     
     for (let attempt = 1; attempt <= maxCaptchaTries; attempt++) {
@@ -365,13 +424,22 @@ try {
         if (webdavMessage) {
             finalNotification += `\n\n---\n${webdavMessage}`;
         }
+        if (turnstileDebugMessage) {
+            finalNotification += `\n\n---\n${turnstileDebugMessage}`;
+        }
     } else if (infoMessage) {
         finalNotification = infoMessage;
         if (webdavMessage) {
             finalNotification += `\n\n---\n${webdavMessage}`;
         }
-    } else if (webdavMessage) {
+        if (turnstileDebugMessage) {
+            finalNotification += `\n\n---\n${turnstileDebugMessage}`;
+        }
+    } else if (webdavMessage || turnstileDebugMessage) {
         finalNotification = webdavMessage;
+        if (turnstileDebugMessage) {
+            finalNotification += finalNotification ? `\n\n---\n${turnstileDebugMessage}` : turnstileDebugMessage;
+        }
     }
 
     if (finalNotification) {
