@@ -208,23 +208,26 @@ try {
     const maxCaptchaTries = 3;
     let solved = false;
 
-    // 等待Cloudflare Turnstile iframe出现
-    await page.waitForSelector('iframe[title="Widget containing a Cloudflare security challenge"]', { timeout: 15000 }).catch(() => {});
-    const frames = page.frames();
-    const turnstileFrame = frames.find(f => f.url().includes('challenges.cloudflare.com/turnstile'));
-    
-    if (turnstileFrame) {
-        // 点击checkbox label
-        await turnstileFrame.waitForSelector('.ctp-checkbox-label', { timeout: 10000 }).catch(() => {});
-        await turnstileFrame.click('.ctp-checkbox-label').catch(() => {});
-        console.log('已点击Cloudflare Turnstile人机验证框');
-        // 可选：等待验证通过
-        await turnstileFrame.waitForFunction(() => {
-            const el = document.querySelector('.ctp-checkbox-label[aria-checked="true"]');
-            return !!el;
-        }, { timeout: 10000 }).catch(() => {});
-    } else {
-        console.warn('未找到Cloudflare Turnstile iframe');
+    // 进入验证码页面后，先等待Turnstile，如果没有就继续
+    for (let i = 0; i < 5; i++) {
+        await page.waitForTimeout(1000); // 每秒检查一次
+        const turnstileFrame = page.frames().find(
+            f => f.url().includes('challenges.cloudflare.com') || f.url().includes('turnstile')
+        );
+        if (turnstileFrame) {
+            try {
+                await turnstileFrame.waitForSelector('.ctp-checkbox-label', { timeout: 5000 });
+                await turnstileFrame.click('.ctp-checkbox-label');
+                console.log('已点击Cloudflare Turnstile人机验证框');
+                break;
+            } catch (e) {
+                console.warn('Turnstile checkbox未出现');
+            }
+        }
+        if (i === 4) {
+            console.warn('5秒内未找到Cloudflare Turnstile iframe，保存页面以便排查');
+            fs.writeFileSync('turnstile_debug.html', await page.content());
+        }
     }
     
     for (let attempt = 1; attempt <= maxCaptchaTries; attempt++) {
@@ -336,10 +339,18 @@ try {
     let finalNotification = ''
     let webdavMessage = ''
 
+    // 录屏上传
     if (fs.existsSync(recordingPath)) {
         const timestamp = getBeijingTimeString().replace(/[\s:]/g, '-');
         const remoteFileName = `vps-renewal_${timestamp}.webm`
         webdavMessage = await uploadToWebDAV(recordingPath, remoteFileName)
+    }
+
+    // turnstile debug html 上传
+    if (fs.existsSync('turnstile_debug.html')) {
+        const timestamp = getBeijingTimeString().replace(/[\s:]/g, '-');
+        const remoteDebugFileName = `turnstile_debug_${timestamp}.html`;
+        turnstileDebugMessage = await uploadToWebDAV('turnstile_debug.html', remoteDebugFileName);
     }
 
     // 合并最终通知消息
