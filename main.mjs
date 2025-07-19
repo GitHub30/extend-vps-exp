@@ -214,7 +214,6 @@ try {
     let solved = false;
 
     // 进入验证码页面后，先等待Turnstile，如果没有就继续
-    let turnstileDebugMessage = '';
     for (let i = 0; i < 5; i++) {
         await setTimeout(1000); // 每秒检查一次
         const turnstileFrame = page.frames().find(
@@ -344,6 +343,7 @@ try {
 
     let finalNotification = ''
     let webdavMessage = ''
+    let turnstileDebugMessage = ''
 
     // 录屏上传
     if (fs.existsSync(recordingPath)) {
