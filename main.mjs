@@ -129,6 +129,365 @@ async function getExpirationDate(page) {
     }
 }
 
+/**
+ * 尝试通过 JavaScript 直接调用 Turnstile 回调函数
+ */
+async function tryDirectTurnstileCallback(page) {
+    try {
+        const result = await page.evaluate(() => {
+            // 尝试查找并调用 callbackTurnstile 函数
+            if (typeof window.callbackTurnstile === 'function') {
+                console.log('找到 callbackTurnstile 函数，尝试直接调用');
+                window.callbackTurnstile('success');
+                return { success: true, method: 'callbackTurnstile' };
+            }
+            
+            // 查找 Turnstile 相关的全局变量
+            const turnstileElements = document.querySelectorAll('[data-callback="callbackTurnstile"]');
+            if (turnstileElements.length > 0) {
+                console.log('找到带有 data-callback 的元素');
+                return { success: true, method: 'data-callback', count: turnstileElements.length };
+            }
+            
+            return { success: false, reason: 'No Turnstile callback found' };
+        });
+        
+        console.log('直接回调尝试结果:', result);
+        return result.success;
+    } catch (error) {
+        console.warn('直接调用 Turnstile 回调失败:', error.message);
+        return false;
+    }
+}
+
+/**
+ * 保存详细的 iframe 调试信息
+ */
+async function saveIframeDebugInfo(page, frameIndex = 0) {
+    try {
+        const frames = page.frames();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        
+        for (let i = 0; i < frames.length; i++) {
+            const frame = frames[i];
+            try {
+                // 获取 iframe 基本信息
+                const frameInfo = {
+                    url: frame.url(),
+                    name: frame.name(),
+                    parentFrame: frame.parentFrame() ? frame.parentFrame().url() : 'main'
+                };
+                
+                // 获取 iframe 内容
+                const frameContent = await frame.content();
+                
+                // 尝试获取 iframe 内的所有可点击元素
+                const clickableElements = await frame.evaluate(() => {
+                    const elements = [];
+                    const selectors = [
+                        'input[type="checkbox"]',
+                        'button',
+                        '.checkbox',
+                        '.cb-lb',
+                        '.ctp-checkbox',
+                        '.ctp-checkbox-label',
+                        '.cf-turnstile-wrapper',
+                        '[role="checkbox"]',
+                        '[tabindex]',
+                        'div[onclick]',
+                        'span[onclick]'
+                    ];
+                    
+                    selectors.forEach(selector => {
+                        const found = document.querySelectorAll(selector);
+                        found.forEach((el, idx) => {
+                            elements.push({
+                                selector,
+                                index: idx,
+                                tagName: el.tagName,
+                                className: el.className,
+                                id: el.id,
+                                textContent: el.textContent?.trim().substring(0, 100),
+                                attributes: Array.from(el.attributes).map(attr => ({
+                                    name: attr.name,
+                                    value: attr.value
+                                })),
+                                boundingRect: el.getBoundingClientRect(),
+                                visible: el.offsetWidth > 0 && el.offsetHeight > 0
+                            });
+                        });
+                    });
+                    
+                    return elements;
+                }).catch(() => []);
+                
+                // 保存详细信息
+                const debugInfo = {
+                    frameInfo,
+                    clickableElements,
+                    frameContent
+                };
+                
+                fs.writeFileSync(`turnstile_debug_frame_${i}_${timestamp}.json`, JSON.stringify(debugInfo, null, 2));
+                fs.writeFileSync(`turnstile_debug_frame_${i}_${timestamp}.html`, frameContent);
+                
+                console.log(`保存 frame ${i} 调试信息: ${frame.url()}, 找到 ${clickableElements.length} 个可能的可点击元素`);
+                
+            } catch (frameError) {
+                console.warn(`无法获取 frame ${i} 详细信息:`, frameError.message);
+            }
+        }
+    } catch (error) {
+        console.warn('保存 iframe 调试信息失败:', error.message);
+    }
+}
+
+/**
+ * 检测 Turnstile 验证是否成功
+ */
+async function detectTurnstileSuccess(page) {
+    try {
+        // 方法1: 检查页面中是否有成功标识
+        const hasSuccessIndicator = await page.evaluate(() => {
+            // 检查常见的成功标识
+            const successSelectors = [
+                '.cf-turnstile-success',
+                '[data-cf-turnstile-success]',
+                '.turnstile-success'
+            ];
+            
+            for (const selector of successSelectors) {
+                if (document.querySelector(selector)) {
+                    return true;
+                }
+            }
+            
+            // 检查是否有 Turnstile token
+            const inputs = document.querySelectorAll('input[name*="turnstile"], input[name*="cf-turnstile"]');
+            for (const input of inputs) {
+                if (input.value && input.value.length > 10) {
+                    return true;
+                }
+            }
+            
+            return false;
+        });
+        
+        if (hasSuccessIndicator) {
+            console.log('检测到 Turnstile 验证成功标识');
+            return true;
+        }
+        
+        // 方法2: 检查 iframe 中的状态
+        const frames = page.frames();
+        for (const frame of frames) {
+            if (frame.url().includes('challenges.cloudflare.com') || frame.url().includes('turnstile')) {
+                try {
+                    const frameSuccess = await frame.evaluate(() => {
+                        const successElements = document.querySelectorAll('[aria-checked="true"], .success, .completed');
+                        return successElements.length > 0;
+                    });
+                    
+                    if (frameSuccess) {
+                        console.log('在 Turnstile iframe 中检测到成功状态');
+                        return true;
+                    }
+                } catch (frameError) {
+                    // 忽略 iframe 访问错误
+                }
+            }
+        }
+        
+        return false;
+    } catch (error) {
+        console.warn('检测 Turnstile 成功状态时出错:', error.message);
+        return false;
+    }
+}
+
+/**
+ * 增强的 Turnstile 验证处理函数
+ */
+async function handleTurnstileVerification(page, maxAttempts = 5) {
+    console.log('开始增强的 Turnstile 验证处理...');
+    
+    // 策略1: 尝试直接调用回调函数
+    console.log('策略1: 尝试直接调用 JavaScript 回调函数');
+    const directCallbackSuccess = await tryDirectTurnstileCallback(page);
+    if (directCallbackSuccess) {
+        await setTimeout(2000);
+        const isSuccess = await detectTurnstileSuccess(page);
+        if (isSuccess) {
+            console.log('直接回调方法成功');
+            return true;
+        }
+    }
+    
+    // 策略2: 增强的 iframe 处理
+    console.log('策略2: 增强的 iframe 和元素检测');
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log(`Turnstile 处理尝试 ${attempt}/${maxAttempts}`);
+        
+        await setTimeout(1000 * attempt); // 递增延迟
+        
+        // 首先检查主页面是否有 Turnstile 元素
+        const mainPageSelectors = [
+            '[data-sitekey*="0x4AAAAAABlb1fIlWBrSDU3B"]',
+            '[data-sitekey^="0x4"]',
+            '[data-callback="callbackTurnstile"]',
+            '.cf-turnstile',
+            '.cloudflare-turnstile'
+        ];
+        
+        for (const selector of mainPageSelectors) {
+            try {
+                const element = await page.$(selector);
+                if (element) {
+                    console.log(`在主页面找到 Turnstile 元素: ${selector}`);
+                    
+                    // 尝试不同的点击方法
+                    const clickMethods = [
+                        () => page.click(selector),
+                        () => element.click(),
+                        () => page.evaluate((sel) => {
+                            const el = document.querySelector(sel);
+                            if (el) {
+                                el.click();
+                                return true;
+                            }
+                            return false;
+                        }, selector)
+                    ];
+                    
+                    for (let i = 0; i < clickMethods.length; i++) {
+                        try {
+                            await clickMethods[i]();
+                            console.log(`主页面元素点击成功 (方法 ${i + 1})`);
+                            await setTimeout(3000);
+                            
+                            const isSuccess = await detectTurnstileSuccess(page);
+                            if (isSuccess) {
+                                console.log('主页面 Turnstile 验证成功');
+                                return true;
+                            }
+                            break;
+                        } catch (clickError) {
+                            console.warn(`主页面元素点击方法 ${i + 1} 失败:`, clickError.message);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.log(`主页面选择器 ${selector} 未找到元素`);
+            }
+        }
+        
+        // 查找和处理 iframe
+        const turnstileFrames = page.frames().filter(f => 
+            f.url().includes('challenges.cloudflare.com') || 
+            f.url().includes('turnstile') ||
+            f.url().includes('cf-chl-widget') ||
+            f.url().includes('cloudflare.com')
+        );
+        
+        if (turnstileFrames.length > 0) {
+            console.log(`找到 ${turnstileFrames.length} 个 Turnstile iframe`);
+            
+            for (const frame of turnstileFrames) {
+                console.log(`处理 iframe: ${frame.url()}`);
+                
+                // 等待 iframe 加载
+                await setTimeout(2000);
+                
+                // 扩展的选择器列表
+                const iframeSelectors = [
+                    'input[type="checkbox"]',
+                    '.ctp-checkbox-label',
+                    '.cf-turnstile-wrapper',
+                    '.cb-lb',
+                    '.ctp-checkbox',
+                    '[role="checkbox"]',
+                    'button',
+                    '.checkbox',
+                    '.challenge-checkbox',
+                    'div[tabindex="0"]',
+                    'span[tabindex="0"]',
+                    '[aria-label*="checkbox"]',
+                    '[aria-label*="验证"]',
+                    '[aria-label*="verify"]'
+                ];
+                
+                for (const selector of iframeSelectors) {
+                    try {
+                        // 等待元素出现
+                        await frame.waitForSelector(selector, { timeout: 3000 });
+                        
+                        // 尝试不同的点击方法
+                        const clickMethods = [
+                            () => frame.click(selector),
+                            () => frame.evaluate((sel) => {
+                                const el = document.querySelector(sel);
+                                if (el && typeof el.click === 'function') {
+                                    el.click();
+                                    return true;
+                                }
+                                return false;
+                            }, selector),
+                            () => frame.evaluate((sel) => {
+                                const el = document.querySelector(sel);
+                                if (el) {
+                                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                    return true;
+                                }
+                                return false;
+                            }, selector)
+                        ];
+                        
+                        for (let i = 0; i < clickMethods.length; i++) {
+                            try {
+                                const clickResult = await clickMethods[i]();
+                                console.log(`iframe 点击成功 (选择器: ${selector}, 方法: ${i + 1})`);
+                                await setTimeout(3000);
+                                
+                                const isSuccess = await detectTurnstileSuccess(page);
+                                if (isSuccess) {
+                                    console.log('iframe Turnstile 验证成功');
+                                    return true;
+                                }
+                                break;
+                            } catch (clickError) {
+                                console.warn(`iframe 点击方法 ${i + 1} 失败:`, clickError.message);
+                            }
+                        }
+                        
+                        break; // 如果找到了元素，就不再尝试其他选择器
+                    } catch (selectorError) {
+                        console.log(`iframe 选择器 ${selector} 未找到或超时`);
+                    }
+                }
+            }
+        } else {
+            console.log('未找到 Turnstile iframe');
+        }
+        
+        // 在最后一次尝试时保存调试信息
+        if (attempt === maxAttempts) {
+            console.log('保存最终调试信息...');
+            await saveIframeDebugInfo(page);
+        }
+        
+        // 检查是否可能不需要验证码
+        const hasOtherCaptcha = await page.$('img[src^="data:"]');
+        if (!hasOtherCaptcha && attempt >= 3) {
+            console.log('未找到其他验证码，可能不需要 Turnstile 验证');
+            return true; // 假设不需要验证
+        }
+    }
+    
+    console.warn(`Turnstile 验证处理失败，已尝试 ${maxAttempts} 次`);
+    return false;
+}
+
 // 生成北京时间字符串，格式 "YYYY-MM-DD HH:mm"
 function getBeijingTimeString() {
     const dt = new Date(Date.now() + 8 * 60 * 60 * 1000); // UTC+8
@@ -213,85 +572,15 @@ try {
     const maxCaptchaTries = 3;
     let solved = false;
 
-    // 进入验证码页面后，先等待Turnstile，如果没有就继续
-    let turnstileHandled = false;
-    for (let i = 0; i < 5; i++) {
-        await setTimeout(1000); // 每秒检查一次
-        
-        // 首先检查主页面是否有data-sitekey属性的Turnstile元素
-        const mainPageTurnstile = await page.$('[data-sitekey*="0x4AAAAAABlb1fIlWBrSDU3B"], [data-sitekey^="0x4"], [data-callback="callbackTurnstile"]');
-        if (mainPageTurnstile) {
-            console.log('在主页面找到Cloudflare Turnstile元素');
-            try {
-                await page.click('[data-sitekey*="0x4AAAAAABlb1fIlWBrSDU3B"], [data-sitekey^="0x4"], [data-callback="callbackTurnstile"]');
-                console.log('已点击主页面Cloudflare Turnstile元素');
-                turnstileHandled = true;
-                break;
-            } catch (e) {
-                console.warn('点击主页面Turnstile元素失败:', e.message);
-            }
-        }
-        
-        // 查找Turnstile iframe - 使用更准确的URL匹配
-        const turnstileFrame = page.frames().find(
-            f => f.url().includes('challenges.cloudflare.com') || 
-                 f.url().includes('turnstile') ||
-                 f.url().includes('cf-chl-widget')
-        );
-        
-        if (turnstileFrame) {
-            console.log(`找到Cloudflare Turnstile iframe: ${turnstileFrame.url()}`);
-            
-            // 尝试多种选择器策略
-            const selectors = [
-                '.ctp-checkbox-label',
-                '.cf-turnstile-wrapper',
-                '[type="checkbox"]',
-                '.cb-lb',
-                '.ctp-checkbox',
-                'input[type="checkbox"]'
-            ];
-            
-            let clicked = false;
-            for (const selector of selectors) {
-                try {
-                    await turnstileFrame.waitForSelector(selector, { timeout: 3000 });
-                    await turnstileFrame.click(selector);
-                    console.log(`已点击Cloudflare Turnstile人机验证框 (选择器: ${selector})`);
-                    clicked = true;
-                    turnstileHandled = true;
-                    break;
-                } catch (e) {
-                    console.log(`选择器 ${selector} 未找到或点击失败`);
-                }
-            }
-            
-            if (clicked) break;
-        }
-        
-        console.log(`Turnstile检查第 ${i + 1} 次，暂未找到可用元素`);
-        
-        if (i === 4) {
-            console.warn('5秒内未找到或无法点击Cloudflare Turnstile，保存页面以便排查');
-            fs.writeFileSync('turnstile_debug.html', await page.content());
-            
-            // 同时保存所有frame的内容用于调试
-            const frames = page.frames();
-            for (let j = 0; j < frames.length; j++) {
-                try {
-                    const frameContent = await frames[j].content();
-                    fs.writeFileSync(`turnstile_frame_${j}_debug.html`, frameContent);
-                    console.log(`保存frame ${j} 内容: ${frames[j].url()}`);
-                } catch (e) {
-                    console.warn(`无法获取frame ${j} 内容:`, e.message);
-                }
-            }
-        }
-    }
+    // 使用增强的 Turnstile 验证处理
+    console.log('开始处理 Cloudflare Turnstile 验证...');
+    const turnstileHandled = await handleTurnstileVerification(page, 5);
     
     if (turnstileHandled) {
         console.log('Turnstile处理完成，等待验证结果...');
-        await setTimeout(2000); // 等待验证处理
+        await setTimeout(3000); // 等待验证处理完成
+    } else {
+        console.warn('Turnstile验证处理失败，但继续执行后续流程');
     }
     
     for (let attempt = 1; attempt <= maxCaptchaTries; attempt++) {
@@ -411,12 +700,41 @@ try {
         webdavMessage = await uploadToWebDAV(recordingPath, remoteFileName)
     }
 
-    // turnstile debug html 上传
+    // 增强的 turnstile debug 文件上传
+    let allDebugMessages = [];
+    
+    // 上传传统的 debug html 文件
     if (fs.existsSync('turnstile_debug.html')) {
         const timestamp = getBeijingTimeString().replace(/[\s:]/g, '-');
         const remoteDebugFileName = `turnstile_debug_${timestamp}.html`;
-        turnstileDebugMessage = await uploadToWebDAV('turnstile_debug.html', remoteDebugFileName);
+        const debugMessage = await uploadToWebDAV('turnstile_debug.html', remoteDebugFileName);
+        if (debugMessage) allDebugMessages.push(debugMessage);
     }
+    
+    // 上传详细的 frame debug 文件 (JSON 和 HTML)
+    const debugFiles = fs.readdirSync('.').filter(file => 
+        file.startsWith('turnstile_debug_frame_') && 
+        (file.endsWith('.json') || file.endsWith('.html'))
+    );
+    
+    for (const debugFile of debugFiles) {
+        try {
+            const timestamp = getBeijingTimeString().replace(/[\s:]/g, '-');
+            const extension = debugFile.split('.').pop();
+            const remoteDebugFileName = `enhanced_${debugFile.replace(/\.[^.]*$/, '')}_${timestamp}.${extension}`;
+            const debugMessage = await uploadToWebDAV(debugFile, remoteDebugFileName);
+            if (debugMessage) {
+                allDebugMessages.push(`📁 增强调试文件: \`${remoteDebugFileName}\``);
+            }
+        } catch (uploadError) {
+            console.warn(`上传调试文件 ${debugFile} 失败:`, uploadError.message);
+        }
+    }
+    
+    // 合并所有调试信息
+    turnstileDebugMessage = allDebugMessages.length > 0 ? 
+        `🔍 **调试文件已上传** (${allDebugMessages.length} 个文件)\n${allDebugMessages.join('\n')}` : 
+        '';
 
     // 合并最终通知消息
     if (scriptErrorMessage) {
