@@ -1,0 +1,10 @@
+node_modules/
+*.log
+*.png
+*.webm
+*.html
+expire.txt
+captcha_failed_*.png
+turnstile_debug*
+recording.webm
+no_captcha.html
