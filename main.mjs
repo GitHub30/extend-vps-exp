@@ -960,10 +960,136 @@ if (process.env.PROXY_SERVER) {
     args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''))
 }
 
-const browser = await puppeteer.launch({
-    defaultViewport: { width: 1280, height: 1024 },
-    args,
-})
+// 新的浏览器启动代码，添加Chrome安装和路径检测
+import { execSync } from 'child_process';
+import { existsSync } from 'fs';
+import path from 'path';
+
+// 定义可能的Chrome路径
+const possibleChromePaths = [
+  // Linux 路径
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  // Windows 路径
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  // macOS 路径
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+];
+
+// 启动浏览器的函数，添加错误处理和自动安装
+async function launchBrowser() {
+  try {
+    console.log('尝试启动浏览器...');
+    
+    // 检查环境中是否已有Chrome
+    let executablePath = null;
+    for (const chromePath of possibleChromePaths) {
+      if (existsSync(chromePath)) {
+        executablePath = chromePath;
+        console.log(`找到Chrome浏览器: ${chromePath}`);
+        break;
+      }
+    }
+    
+    // 如果找不到Chrome，尝试安装
+    if (!executablePath) {
+      console.log('未找到Chrome浏览器，尝试安装...');
+      try {
+        // 在GitHub Actions或其他CI环境中安装Chrome
+        if (process.env.CI) {
+          console.log('检测到CI环境，使用apt安装Chrome...');
+          execSync('apt-get update && apt-get install -y google-chrome-stable');
+        } else {
+          // 在非CI环境中使用Puppeteer的安装方式
+          console.log('使用Puppeteer安装Chrome...');
+          execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
+        }
+        console.log('Chrome安装完成');
+      } catch (installError) {
+        console.error('Chrome安装失败:', installError);
+        // 尝试再次检查Chrome是否存在
+        for (const chromePath of possibleChromePaths) {
+          if (existsSync(chromePath)) {
+            executablePath = chromePath;
+            console.log(`安装后找到Chrome: ${chromePath}`);
+            break;
+          }
+        }
+      }
+    }
+
+    // 配置浏览器启动选项
+    const launchOptions = {
+      headless: "new",
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1280,720'
+      ]
+    };
+    
+    // 如果找到Chrome路径，则使用它
+    if (executablePath) {
+      launchOptions.executablePath = executablePath;
+    }
+    
+    // 尝试启动浏览器
+    console.log('启动浏览器，选项:', JSON.stringify(launchOptions));
+    const browser = await puppeteer.launch(launchOptions);
+    console.log('浏览器启动成功');
+    return browser;
+  } catch (error) {
+    console.error('浏览器启动失败:', error);
+    
+    // 详细的错误诊断信息
+    console.log('环境信息:');
+    console.log(`Node.js版本: ${process.version}`);
+    console.log(`操作系统: ${process.platform} ${process.arch}`);
+    console.log(`当前工作目录: ${process.cwd()}`);
+    
+    try {
+      // 检查Chrome是否已安装以及版本
+      const chromeVersion = execSync('google-chrome --version').toString().trim();
+      console.log(`已安装的Chrome版本: ${chromeVersion}`);
+    } catch (e) {
+      console.log('无法获取Chrome版本信息');
+    }
+    
+    // 再次尝试安装并启动
+    try {
+      console.log('尝试强制安装Chrome...');
+      execSync('npx puppeteer browsers install chrome --force', { stdio: 'inherit' });
+      
+      // 尝试使用Puppeteer的默认行为
+      console.log('使用默认路径再次尝试启动...');
+      const browser = await puppeteer.launch({
+        headless: "new",
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+      console.log('浏览器启动成功(第二次尝试)');
+      return browser;
+    } catch (retryError) {
+      console.error('所有尝试均失败:', retryError);
+      throw new Error(`无法启动Chrome浏览器: ${error.message}\n重试也失败: ${retryError.message}`);
+    }
+  }
+}
+
+// 替换原来的browser启动代码
+// const browser = await puppeteer.launch({
+//     defaultViewport: { width: 1280, height: 1024 },
+//     args,
+// })
+
+const browser = await launchBrowser();
+
+
 const page = await browser.newPage();
 
 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
