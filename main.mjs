@@ -207,6 +207,25 @@ try {
     // 验证码处理（最多尝试 maxCaptchaTries 次，自动刷新并截图失败）
     const maxCaptchaTries = 3;
     let solved = false;
+
+    // 等待Cloudflare Turnstile iframe出现
+    await page.waitForSelector('iframe[title="Widget containing a Cloudflare security challenge"]', { timeout: 15000 }).catch(() => {});
+    const frames = page.frames();
+    const turnstileFrame = frames.find(f => f.url().includes('challenges.cloudflare.com/turnstile'));
+    
+    if (turnstileFrame) {
+        // 点击checkbox label
+        await turnstileFrame.waitForSelector('.ctp-checkbox-label', { timeout: 10000 }).catch(() => {});
+        await turnstileFrame.click('.ctp-checkbox-label').catch(() => {});
+        console.log('已点击Cloudflare Turnstile人机验证框');
+        // 可选：等待验证通过
+        await turnstileFrame.waitForFunction(() => {
+            const el = document.querySelector('.ctp-checkbox-label[aria-checked="true"]');
+            return !!el;
+        }, { timeout: 10000 }).catch(() => {});
+    } else {
+        console.warn('未找到Cloudflare Turnstile iframe');
+    }
     
     for (let attempt = 1; attempt <= maxCaptchaTries; attempt++) {
         const captchaImg = await page.$('img[src^="data:"]');
