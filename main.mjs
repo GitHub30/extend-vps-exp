@@ -151,6 +151,11 @@ const browser = await puppeteer.launch({
 })
 const page = await browser.newPage();
 
+await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
+
+page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+page.on('pageerror', error => console.log('PAGE ERROR:', error));
+
 try {
     if (process.env.PROXY_SERVER) {
         const { username, password } = new URL(process.env.PROXY_SERVER)
@@ -209,6 +214,7 @@ try {
     let solved = false;
 
     // 进入验证码页面后，先等待Turnstile，如果没有就继续
+    let turnstileDebugMessage = '';
     for (let i = 0; i < 5; i++) {
         await setTimeout(1000); // 每秒检查一次
         const turnstileFrame = page.frames().find(
